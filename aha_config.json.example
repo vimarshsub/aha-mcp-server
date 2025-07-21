@@ -1,0 +1,8 @@
+{
+  "aha_domain": "yourcompany.aha.io",
+  "api_key": "your_api_key_here",
+  "default_product": "optional_default_product_id",
+  "rate_limit_delay": 0.2,
+  "timeout": 30
+}
+
