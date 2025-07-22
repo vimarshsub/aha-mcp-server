@@ -33,8 +33,16 @@ class AhaConfig:
     timeout: int = 30
     
     @property
-    def base_url(self) -> str:
-        return f"https://{self.domain}/api/v1"
+    def base_url(self) -    Args:
+        query: Text search query to find ideas by content, title, or description (e.g., "API", "mobile", "security")
+        idea_id: Specific idea ID to find related ideas for
+        feature_id: Feature ID to find related ideas for (e.g., "PRJ1-1234")
+        limit: Maximum number of results (default: 20)
+    
+    Examples:
+    - Search for API-related ideas: query="API"
+    - Find ideas for a feature: feature_id="PRJ1-1234"
+    - Search mobile ideas: query="mobile"     return f"https://{self.domain}/api/v1"
 
 # Global configuration instance
 config: Optional[AhaConfig] = None
@@ -111,9 +119,23 @@ class AhaAPIClient:
         try:
             response = await self.session.request(method, endpoint, **kwargs)
             response.raise_for_status()
-            return response.json()
+            
+            # Debug: Check what we're getting
+            content_type = response.headers.get('content-type', '')
+            if 'json' not in content_type:
+                raise Exception(f"Expected JSON response, got content-type: {content_type}")
+            
+            json_data = response.json()
+            if not isinstance(json_data, dict):
+                raise Exception(f"Expected dict, got {type(json_data)}: {json_data}")
+            
+            return json_data
+        except Exception as e:
+            # Don't call .get() on anything that might not be a dict
+            raise Exception(f"API Error: {str(e)}")
         except httpx.HTTPStatusError as e:
-            await self._handle_http_error(e)
+            # Simplified error handling to avoid the .get() issue
+            raise Exception(f"HTTP Error {e.response.status_code}")
         except httpx.RequestError as e:
             raise Exception(f"Network error: {str(e)}")
     
@@ -144,7 +166,36 @@ def format_feature_summary(feature: Dict[str, Any]) -> str:
     ref_num = feature.get('reference_num', 'N/A')
     name = feature.get('name', 'Unnamed Feature')
     status = feature.get('workflow_status', {}).get('name', 'Unknown')
-    assignee = feature.get('assigned_to_user', {}).get('name', 'Unassigned')
+    
+    # Debug: Check multiple possible assignee field names including nested ones
+    assignee_fields = ['assigned_to_user', 'assignee', 'assigned_to', 'owner']
+    assignee = 'Unassigned'
+    assignee_debug = []
+    
+    # Check top-level fields
+    for field in assignee_fields:
+        value = feature.get(field)
+        if value:
+            assignee_debug.append(f"{field}: {value}")
+            if isinstance(value, dict) and 'name' in value:
+                assignee = value['name']
+                break
+            elif isinstance(value, str):
+                assignee = value
+                break
+    
+    # Check nested fields like requirements.assigned_to_user
+    if assignee == 'Unassigned':
+        requirements = feature.get('requirements', {})
+        if requirements and isinstance(requirements, dict):
+            req_assignee = requirements.get('assigned_to_user')
+            if req_assignee:
+                assignee_debug.append(f"requirements.assigned_to_user: {req_assignee}")
+                if isinstance(req_assignee, dict) and 'name' in req_assignee:
+                    assignee = req_assignee['name']
+                elif isinstance(req_assignee, str):
+                    assignee = req_assignee
+    
     release = feature.get('release', {}).get('name', 'No Release')
     
     tags = []
@@ -155,13 +206,21 @@ def format_feature_summary(feature: Dict[str, Any]) -> str:
 Status: {status}
 Assignee: {assignee}
 Release: {release}
-Tags: {', '.join(tags) if tags else 'None'}"""
+Tags: {', '.join(tags) if tags else 'None'}
+Debug: {'; '.join(assignee_debug) if assignee_debug else 'No assignee fields found'}"""
 
 def format_feature_detail(feature: Dict[str, Any]) -> str:
     """Format a feature for detailed display"""
     ref_num = feature.get('reference_num', 'N/A')
     name = feature.get('name', 'Unnamed Feature')
-    description = feature.get('description', 'No description')
+    
+    # Handle description which can be a string or an object
+    description_raw = feature.get('description', 'No description')
+    if isinstance(description_raw, dict):
+        description = description_raw.get('body', 'No description')
+    else:
+        description = description_raw
+    
     status = feature.get('workflow_status', {}).get('name', 'Unknown')
     assignee = feature.get('assigned_to_user', {}).get('name', 'Unassigned')
     release = feature.get('release', {}).get('name', 'No Release')
@@ -173,8 +232,8 @@ def format_feature_detail(feature: Dict[str, Any]) -> str:
     updated_at = feature.get('updated_at', '')
     
     tags = []
-    if 'tags' in feature and feature['tags']:
-        tags = [tag.get('name', '') for tag in feature['tags'] if tag.get('name')]
+    if 'tags' in feature and feature['tags'] and isinstance(feature['tags'], list):
+        tags = [tag.get('name', '') for tag in feature['tags'] if isinstance(tag, dict) and tag.get('name')]
     
     result = f"""Feature: {ref_num} - {name}
 Description: {description}
@@ -190,12 +249,13 @@ Updated: {updated_at}"""
     
     # Add custom fields if present
     custom_fields = feature.get('custom_fields', [])
-    if custom_fields:
+    if custom_fields and isinstance(custom_fields, list):
         result += "\n\nCustom Fields:"
         for field in custom_fields:
-            field_name = field.get('name', 'Unknown Field')
-            field_value = field.get('value', 'No Value')
-            result += f"\n- {field_name}: {field_value}"
+            if isinstance(field, dict):
+                field_name = field.get('name', 'Unknown Field')
+                field_value = field.get('value', 'No Value')
+                result += f"\n- {field_name}: {field_value}"
     
     return result
 
@@ -212,15 +272,19 @@ async def search_features(
     tags: Optional[str] = None,
     limit: int = 20
 ) -> str:
-    """Search for features across the Aha! workspace.
+    """Search for FEATURES in the Aha! workspace. Use this tool when looking for development features, 
+    requirements, or functionality that is being built or planned. Features are work items that get 
+    implemented by development teams.
+    
+    For searching IDEAS (customer requests, feedback, suggestions), use get_related_ideas instead.
     
     Args:
-        query: Text search query
+        query: Text search query for feature names, descriptions, or content
         product_id: Filter by product ID
         release_id: Filter by release ID
         epic_id: Filter by epic ID
-        status: Filter by workflow status
-        assignee: Filter by assignee
+        status: Filter by workflow status (e.g., "In Development", "FCS", "Shipped")
+        assignee: Filter by assignee name
         tags: Filter by tags (comma-separated)
         limit: Maximum number of results (default: 20)
     """
@@ -259,7 +323,18 @@ async def search_features(
             
             # Format results
             results = []
-            for feature in features[:limit]:
+            for i, feature in enumerate(features[:limit]):
+                if i == 0:  # Debug first feature
+                    # Add debug info for the first feature
+                    debug_info = f"DEBUG - Available fields: {list(feature.keys())}"
+                    if 'assigned_to_user' in feature:
+                        debug_info += f" | assigned_to_user: {feature['assigned_to_user']}"
+                    if 'requirements' in feature:
+                        debug_info += f" | requirements: {feature['requirements']}"
+                    if 'product_id' in feature:
+                        debug_info += f" | product_id: {feature['product_id']}"
+                    results.append(debug_info)
+                
                 results.append(format_feature_summary(feature))
             
             total_found = len(features)
@@ -276,22 +351,31 @@ async def search_features(
 
 @mcp.tool()
 async def get_feature(feature_id: str) -> str:
-    """Get detailed information about a specific feature.
+    """Get detailed information about a specific FEATURE by its ID or reference number.
+    Features are development work items, requirements, or functionality being built.
+    
+    Use this tool when you have a specific feature ID (e.g., "PRJ1-1234", "PRJ2-567") 
+    and need complete details including assignee, status, description, custom fields, etc.
+    
+    For searching multiple features by text query, use search_features instead.
+    For idea information, use get_related_ideas instead.
     
     Args:
-        feature_id: Feature ID or reference number
+        feature_id: Feature ID or reference number (e.g., "PRJ1-1234", "PRJ2-567")
     """
     try:
         config = load_config()
         
         async with AhaAPIClient(config) as client:
-            data = await client.request('GET', f"/features/{feature_id}")
+            data = await client.request('GET', f'/features/{feature_id}')
             
+            # The API returns the feature data directly or wrapped in a 'feature' key
             feature = data.get('feature', data)
+            
             return format_feature_detail(feature)
             
     except Exception as e:
-        return f"Error retrieving feature: {str(e)}"
+        return f"Error retrieving feature {feature_id}: {str(e)}"
 
 @mcp.tool()
 async def create_feature(
@@ -303,13 +387,14 @@ async def create_feature(
     tags: Optional[str] = None,
     custom_fields: Optional[str] = None
 ) -> str:
-    """Create a new feature in Aha!.
+    """Create a new FEATURE in Aha!. Features are development work items that get implemented 
+    by engineering teams (different from ideas which are customer requests/suggestions).
     
     Args:
-        name: Feature name
-        description: Feature description
+        name: Feature name/title
+        description: Feature description or requirements
         release_id: Release to assign the feature to
-        epic_id: Epic to assign the feature to
+        epic_id: Epic to assign the feature to  
         assignee: User to assign the feature to
         tags: Tags to add (comma-separated)
         custom_fields: Custom field values as JSON string
@@ -635,6 +720,166 @@ async def update_feature_score(feature_id: str, score: float) -> str:
             
     except Exception as e:
         return f"Error updating feature score: {str(e)}"
+
+@mcp.tool()
+async def list_products(limit: int = 50) -> str:
+    """List all products available in the Aha! workspace. 
+    
+    Use this tool to:
+    - Discover available products and their IDs
+    - Find product reference prefixes (used in feature IDs like "PRJ1-", "PRJ2-", "APP-")
+    - Get product information before filtering features by product_id
+    
+    Args:
+        limit: Maximum number of results (default: 50)
+    """
+    try:
+        config = load_config()
+        
+        params = {'per_page': min(limit, 200)}
+        
+        async with AhaAPIClient(config) as client:
+            data = await client.request('GET', '/products', params=params)
+            
+            products = data.get('products', [])
+            if not products:
+                return "No products found in the workspace."
+            
+            # Format results
+            results = []
+            for product in products:
+                product_id = product.get('id', 'N/A')
+                name = product.get('name', 'Unnamed Product')
+                reference_prefix = product.get('reference_prefix', 'N/A')
+                created_at = product.get('created_at', '')
+                
+                results.append(f"Product: {name} (ID: {product_id})")
+                results.append(f"  Reference Prefix: {reference_prefix}")
+                results.append(f"  Created: {created_at}")
+                
+                # Add description if available
+                description = product.get('description', '')
+                if description:
+                    # Truncate long descriptions
+                    if len(description) > 100:
+                        description = description[:97] + "..."
+                    results.append(f"  Description: {description}")
+                
+                results.append("")  # Empty line for separation
+            
+            total_found = len(products)
+            result_text = f"Found {total_found} product(s):\n\n"
+            result_text += "\n".join(results)
+            
+            if total_found >= limit:
+                result_text += f"\n\n(Showing first {limit} results)"
+            
+            return result_text
+            
+    except Exception as e:
+        return f"Error retrieving products: {str(e)}"
+
+@mcp.tool()
+async def get_related_ideas(
+    query: Optional[str] = None,
+    idea_id: Optional[str] = None,
+    feature_id: Optional[str] = None,
+    limit: int = 20
+) -> str:
+    """Search for and retrieve IDEAS from Aha!. Use this tool when looking for customer requests, 
+    feedback, suggestions, or enhancement ideas that have been submitted to the product team.
+    
+    IDEAS are different from FEATURES - ideas are customer requests/suggestions, while features 
+    are development work items. Use search_features for development features instead.
+    
+    This tool can:
+    1. Search ideas by text query (most reliable method)
+    2. Find ideas related to another idea 
+    3. Find ideas related to a specific feature (may not always return results)
+    
+    Note: Feature-to-idea relationships may not be consistently available in all Aha! configurations.
+    Text-based search (using 'query' parameter) is the most reliable way to find ideas.
+    
+    Args:
+        query: Text search query to find ideas by content, title, or description (e.g., "API", "mobile", "security")
+        idea_id: Specific idea ID to find related ideas for
+        feature_id: Feature ID to find related ideas for (e.g., "PRJ1-123") - may not always work
+        limit: Maximum number of results (default: 20)
+    
+    Examples:
+    - Search for API-related ideas: query="API"
+    - Search mobile ideas: query="mobile"
+    - Find ideas for a feature: feature_id="PRJ1-123" (may return no results)
+    """
+    try:
+        config = load_config()
+        
+        # Build parameters
+        params = {'per_page': min(limit, 200)}
+        
+        # If we have a text query, use the ideas search endpoint instead of related
+        if query:
+            params['q'] = query
+            endpoint = '/ideas'
+        else:
+            # Use the related ideas endpoint for specific idea/feature relationships
+            if idea_id:
+                params['idea_id'] = idea_id
+            if feature_id:
+                params['feature_id'] = feature_id
+            endpoint = '/ideas/related'
+        
+        async with AhaAPIClient(config) as client:
+            data = await client.request('GET', endpoint, params=params)
+            
+            ideas = data.get('ideas', [])
+            if not ideas:
+                return "No related ideas found."
+            
+            # Format results
+            results = []
+            for i, idea in enumerate(ideas[:limit]):
+                idea_id = idea.get('id', 'N/A')
+                name = idea.get('name', 'Unnamed Idea')
+                reference_num = idea.get('reference_num', 'N/A')
+                status = idea.get('workflow_status', {}).get('name', 'Unknown') if isinstance(idea.get('workflow_status'), dict) else 'Unknown'
+                created_at = idea.get('created_at', '')
+                
+                # Get score if available
+                score = idea.get('score', 'No Score')
+                
+                # Get category if available
+                category = idea.get('category', {}).get('name', 'No Category') if isinstance(idea.get('category'), dict) else 'No Category'
+                
+                results.append(f"Idea: {reference_num} - {name}")
+                results.append(f"  ID: {idea_id}")
+                results.append(f"  Status: {status}")
+                results.append(f"  Category: {category}")
+                results.append(f"  Score: {score}")
+                results.append(f"  Created: {created_at}")
+                
+                # Add description if available (truncated)
+                description = idea.get('description', '')
+                if description:
+                    if isinstance(description, dict):
+                        description = description.get('body', '')
+                    if len(description) > 150:
+                        description = description[:147] + "..."
+                    results.append(f"  Description: {description}")
+                
+                results.append("")  # Empty line for separation
+            
+            total_found = len(ideas)
+            result_text = f"Found {total_found} related idea(s):\n\n"
+            result_text += "\n".join(results)
+            
+            if total_found > limit:
+                result_text += f"\n\n(Showing first {limit} results)"
+            
+            return result_text
+            
+    except Exception as e:
+        return f"Error retrieving related ideas: {str(e)}"
 
 if __name__ == "__main__":
     # Initialize and run the server
