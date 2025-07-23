@@ -33,16 +33,8 @@ class AhaConfig:
     timeout: int = 30
     
     @property
-    def base_url(self) -    Args:
-        query: Text search query to find ideas by content, title, or description (e.g., "API", "mobile", "security")
-        idea_id: Specific idea ID to find related ideas for
-        feature_id: Feature ID to find related ideas for (e.g., "PRJ1-1234")
-        limit: Maximum number of results (default: 20)
-    
-    Examples:
-    - Search for API-related ideas: query="API"
-    - Find ideas for a feature: feature_id="PRJ1-1234"
-    - Search mobile ideas: query="mobile"     return f"https://{self.domain}/api/v1"
+    def base_url(self) -> str:
+        return f"https://{self.domain}/api/v1"
 
 # Global configuration instance
 config: Optional[AhaConfig] = None
