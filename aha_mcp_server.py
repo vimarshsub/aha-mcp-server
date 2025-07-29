@@ -524,6 +524,10 @@ async def update_feature(
         if custom_fields:
             try:
                 custom_fields_data = json.loads(custom_fields)
+                # The Aha! API expects custom fields as either:
+                # 1. Simple key-value pairs: {"field_key": "value"}
+                # 2. Array of objects: [{"key": "field_key", "value": "field_value"}]
+                # We'll try the simple key-value format first
                 update_data['feature']['custom_fields'] = custom_fields_data
             except json.JSONDecodeError:
                 return "Error: custom_fields must be valid JSON"
@@ -1042,6 +1046,72 @@ async def get_current_user() -> str:
     except Exception as e:
         return f"Error retrieving current user information: {str(e)}"
 
+@mcp.tool()
+async def list_releases_by_product(product_id: str, limit: int = 50) -> str:
+    """List all releases within a specific product in the Aha! workspace.
+    
+    Use this tool to:
+    - Discover available releases and their IDs within a product
+    - Find release information including names, dates, and statuses
+    - Get release IDs needed for creating features or other operations
+    
+    Args:
+        product_id: Product ID to list releases for (get from list_products)
+        limit: Maximum number of results (default: 50)
+    """
+    try:
+        config = load_config()
+        
+        params = {'per_page': min(limit, 200)}
+        
+        async with AhaAPIClient(config) as client:
+            data = await client.request('GET', f'/products/{product_id}/releases', params=params)
+            
+            releases = data.get('releases', [])
+            if not releases:
+                return f"No releases found for product ID: {product_id}"
+            
+            # Format results
+            results = []
+            for release in releases:
+                release_id = release.get('id', 'N/A')
+                name = release.get('name', 'Unnamed Release')
+                reference_prefix = release.get('reference_prefix', 'N/A')
+                start_date = release.get('start_date', 'N/A')
+                release_date = release.get('release_date', 'N/A')
+                created_at = release.get('created_at', '')
+                updated_at = release.get('updated_at', '')
+                
+                results.append(f"Release: {name}")
+                results.append(f"  ID: {release_id}")
+                results.append(f"  Reference: {reference_prefix}")
+                results.append(f"  Start Date: {start_date}")
+                results.append(f"  Release Date: {release_date}")
+                results.append(f"  Created: {created_at}")
+                results.append(f"  Updated: {updated_at}")
+                
+                # Add description if available
+                description = release.get('description', '')
+                if description:
+                    # Truncate long descriptions
+                    if len(description) > 100:
+                        description = description[:97] + "..."
+                    results.append(f"  Description: {description}")
+                
+                results.append("")  # Empty line for separation
+            
+            total_found = len(releases)
+            result_text = f"Found {total_found} release(s) for product {product_id}:\n\n"
+            result_text += "\n".join(results)
+            
+            if total_found >= limit:
+                result_text += f"\n\n(Showing first {limit} results)"
+            
+            return result_text
+            
+    except Exception as e:
+        return f"Error retrieving releases for product {product_id}: {str(e)}"
+
 if __name__ == "__main__":
     import sys
     
@@ -1076,6 +1146,7 @@ PRODUCT & RELEASE MANAGEMENT TOOLS:
     - mcp_aha_list_features_by_epic     Get features in a specific epic
     - mcp_aha_list_users           List users in the workspace
     - mcp_aha_get_current_user     Get current authenticated user info
+    - mcp_aha_list_releases_by_product  List releases in a specific product
 
 IDEAS & FEEDBACK TOOLS:
     - mcp_aha_get_related_ideas    Search for customer ideas and feedback

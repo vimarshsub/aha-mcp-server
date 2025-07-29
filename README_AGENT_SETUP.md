@@ -36,6 +36,7 @@ Test that MCP tools are available:
 
 ### Product & Release Management
 - `@mcp_aha_list_products` - List all products
+- `@mcp_aha_list_releases_by_product` - List releases within a product
 - `@mcp_aha_list_features_by_release` - Features in a release
 - `@mcp_aha_list_features_by_epic` - Features in an epic
 
@@ -53,6 +54,7 @@ Test that MCP tools are available:
 @mcp_aha_search_features query="security API" status="Planning"
 @mcp_aha_search_features assigned_to_user="john.doe@company.com" limit=10
 @mcp_aha_list_features_by_release RELEASE-2024-Q1
+@mcp_aha_list_releases_by_product PRODUCT-ID
 ```
 
 ### Feature Management
@@ -116,8 +118,9 @@ asyncio.run(test())
 
 ### Create and Track Feature
 ```
-# 1. Find available releases
+# 1. Find available products and releases
 @mcp_aha_list_products limit=3
+@mcp_aha_list_releases_by_product PRODUCT-ID
 
 # 2. Create feature under a release
 @mcp_aha_create_feature name="New Dashboard Widget" description="User-friendly analytics widget" release_id="REL-123"
@@ -127,6 +130,18 @@ asyncio.run(test())
 
 # 4. Add relevant tags
 @mcp_aha_add_feature_tags DNAC-5678 "dashboard,analytics,ui"
+```
+
+### Find Specific Release (e.g., DNAC Parking Lot)
+```
+# 1. List all products to find DNAC product ID
+@mcp_aha_list_products limit=20
+
+# 2. List releases for DNAC product to find "Parking Lot"
+@mcp_aha_list_releases_by_product DNAC-PRODUCT-ID
+
+# 3. Use the release ID from step 2 for operations
+@mcp_aha_list_features_by_release PARKING-LOT-RELEASE-ID
 ```
 
 ### Research Customer Requests
