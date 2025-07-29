@@ -440,6 +440,10 @@ async def create_feature(
     """Create a new FEATURE in Aha!. Features are development work items that get implemented 
     by engineering teams (different from ideas which are customer requests/suggestions).
     
+    Common release IDs:
+    - DNAC Parking Lot: 7190101038140158492
+    - Use @mcp_aha_list_releases_by_product with DNAC product ID: 7190101037545533715
+    
     Args:
         name: Feature name/title
         release_id: Release to assign the feature to (REQUIRED - use list_products to find releases)
@@ -1055,8 +1059,11 @@ async def list_releases_by_product(product_id: str, limit: int = 50) -> str:
     - Find release information including names, dates, and statuses
     - Get release IDs needed for creating features or other operations
     
+    Common product IDs:
+    - DNAC Product: 7190101037545533715
+    
     Args:
-        product_id: Product ID to list releases for (get from list_products)
+        product_id: Product ID to list releases for (get from list_products). For DNAC use: 7190101037545533715
         limit: Maximum number of results (default: 50)
     """
     try:
