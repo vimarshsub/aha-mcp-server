@@ -444,6 +444,9 @@ async def create_feature(
     - DNAC Parking Lot: 7190101038140158492
     - Use @mcp_aha_list_releases_by_product with DNAC product ID: 7190101037545533715
     
+    NOTE: When copying custom fields from existing features, use the "key" value, not the "name" value.
+    Example: Use "rank" (key) instead of "* No Tie Rank" (name) for custom field references.
+    
     Args:
         name: Feature name/title
         release_id: Release to assign the feature to (REQUIRED - use list_products to find releases)
@@ -504,6 +507,15 @@ async def update_feature(
         release_id: New release assignment
         epic_id: New epic assignment
         custom_fields: Custom field updates as JSON string
+        
+    IMPORTANT: For custom_fields, use the "key" value, not the "name" value from field definitions.
+    Example custom field mapping:
+    - "rank" (key) → "* No Tie Rank" (name)
+    - "feature_prd_info" (key) → "* PRD Info" (name) 
+    - "use_case" (key) → "* Use Case" (name)
+    - "clarity_product" (key) → "Product Tag" (name)
+    
+    Example custom_fields JSON: {"rank": "15.0", "feature_prd_info": "See Description"}
     """
     try:
         config = load_config()
