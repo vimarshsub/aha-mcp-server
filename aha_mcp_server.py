@@ -122,14 +122,12 @@ class AhaAPIClient:
                 raise Exception(f"Expected dict, got {type(json_data)}: {json_data}")
             
             return json_data
-        except Exception as e:
-            # Don't call .get() on anything that might not be a dict
-            raise Exception(f"API Error: {str(e)}")
         except httpx.HTTPStatusError as e:
-            # Simplified error handling to avoid the .get() issue
-            raise Exception(f"HTTP Error {e.response.status_code}")
+            await self._handle_http_error(e)
         except httpx.RequestError as e:
             raise Exception(f"Network error: {str(e)}")
+        except Exception as e:
+            raise Exception(f"API Error: {str(e)}")
     
     async def _handle_http_error(self, error: httpx.HTTPStatusError):
         """Handle HTTP errors with user-friendly messages"""
@@ -157,22 +155,30 @@ def format_feature_summary(feature: Dict[str, Any]) -> str:
     """Format a feature for summary display"""
     ref_num = feature.get('reference_num', 'N/A')
     name = feature.get('name', 'Unnamed Feature')
-    status = feature.get('workflow_status', {}).get('name', 'Unknown')
     
-    # Debug: Check multiple possible assignee field names including nested ones
+    # Safely get workflow status
+    workflow_status = feature.get('workflow_status')
+    if isinstance(workflow_status, dict):
+        status = workflow_status.get('name', 'Unknown')
+    elif isinstance(workflow_status, str):
+        status = workflow_status
+    else:
+        status = 'Unknown'
+    
+    # Check multiple possible assignee field names including nested ones
     assignee_fields = ['assigned_to_user', 'assignee', 'assigned_to', 'owner']
     assignee = 'Unassigned'
-    assignee_debug = []
     
     # Check top-level fields
     for field in assignee_fields:
         value = feature.get(field)
         if value:
-            assignee_debug.append(f"{field}: {value}")
-            if isinstance(value, dict) and 'name' in value:
-                assignee = value['name']
+            if isinstance(value, dict):
+                # If it's a user object, extract name or email
+                assignee = value.get('name') or value.get('email') or str(value)
                 break
             elif isinstance(value, str):
+                # If it's already a string (email or name)
                 assignee = value
                 break
     
@@ -182,24 +188,30 @@ def format_feature_summary(feature: Dict[str, Any]) -> str:
         if requirements and isinstance(requirements, dict):
             req_assignee = requirements.get('assigned_to_user')
             if req_assignee:
-                assignee_debug.append(f"requirements.assigned_to_user: {req_assignee}")
-                if isinstance(req_assignee, dict) and 'name' in req_assignee:
-                    assignee = req_assignee['name']
+                if isinstance(req_assignee, dict):
+                    assignee = req_assignee.get('name') or req_assignee.get('email') or str(req_assignee)
                 elif isinstance(req_assignee, str):
                     assignee = req_assignee
     
-    release = feature.get('release', {}).get('name', 'No Release')
+    # Safely get release
+    release_data = feature.get('release')
+    if isinstance(release_data, dict):
+        release = release_data.get('name', 'No Release')
+    elif isinstance(release_data, str):
+        release = release_data
+    else:
+        release = 'No Release'
     
     tags = []
     if 'tags' in feature and feature['tags']:
-        tags = [tag.get('name', '') for tag in feature['tags'] if tag.get('name')]
+        if isinstance(feature['tags'], list):
+            tags = [tag.get('name', '') if isinstance(tag, dict) else str(tag) for tag in feature['tags'] if tag]
     
     return f"""Feature: {ref_num} - {name}
 Status: {status}
 Assignee: {assignee}
 Release: {release}
-Tags: {', '.join(tags) if tags else 'None'}
-Debug: {'; '.join(assignee_debug) if assignee_debug else 'No assignee fields found'}"""
+Tags: {', '.join(tags) if tags else 'None'}"""
 
 def format_feature_detail(feature: Dict[str, Any]) -> str:
     """Format a feature for detailed display"""
@@ -214,9 +226,48 @@ def format_feature_detail(feature: Dict[str, Any]) -> str:
         description = description_raw
     
     status = feature.get('workflow_status', {}).get('name', 'Unknown')
-    assignee = feature.get('assigned_to_user', {}).get('name', 'Unassigned')
-    release = feature.get('release', {}).get('name', 'No Release')
-    epic = feature.get('epic', {}).get('name', 'No Epic')
+    
+    # Handle workflow status safely
+    workflow_status = feature.get('workflow_status')
+    if isinstance(workflow_status, dict):
+        status = workflow_status.get('name', 'Unknown')
+    elif isinstance(workflow_status, str):
+        status = workflow_status
+    else:
+        status = 'Unknown'
+    
+    # Handle assignee with robust checking
+    assignee = "Unassigned"
+    assigned_to_user = feature.get('assigned_to_user')
+    if assigned_to_user:
+        if isinstance(assigned_to_user, dict):
+            # If it's a user object, extract name or email
+            assignee = assigned_to_user.get('name') or assigned_to_user.get('email') or str(assigned_to_user)
+        elif isinstance(assigned_to_user, str):
+            # If it's already a string (email or name)
+            assignee = assigned_to_user
+    elif isinstance(feature.get('assignee'), dict):
+        assignee = feature.get('assignee', {}).get('name', 'Unassigned')
+    elif feature.get('assignee'):
+        assignee = str(feature.get('assignee'))
+    
+    # Handle release safely  
+    release_data = feature.get('release')
+    if isinstance(release_data, dict):
+        release = release_data.get('name', 'No Release')
+    elif isinstance(release_data, str):
+        release = release_data
+    else:
+        release = 'No Release'
+        
+    # Handle epic safely
+    epic_data = feature.get('epic')
+    if isinstance(epic_data, dict):
+        epic = epic_data.get('name', 'No Epic')
+    elif isinstance(epic_data, str):
+        epic = epic_data
+    else:
+        epic = 'No Epic'
     progress = feature.get('progress', 0)
     score = feature.get('score', 'No Score')
     
@@ -313,21 +364,32 @@ async def search_features(
             if not features:
                 return "No features found matching the search criteria."
             
-            # Format results
+            # Format results - fetch full details if needed for assignee info
             results = []
+            
+            # Check if we need detailed info (when search includes assignee filter)
+            fetch_details = assigned_to_user is not None
+            
             for i, feature in enumerate(features[:limit]):
-                if i == 0:  # Debug first feature
-                    # Add debug info for the first feature
-                    debug_info = f"DEBUG - Available fields: {list(feature.keys())}"
-                    if 'assigned_to_user' in feature:
-                        debug_info += f" | assigned_to_user: {feature['assigned_to_user']}"
-                    if 'requirements' in feature:
-                        debug_info += f" | requirements: {feature['requirements']}"
-                    if 'product_id' in feature:
-                        debug_info += f" | product_id: {feature['product_id']}"
-                    results.append(debug_info)
+                # If we're filtering by assignee, fetch full details to show assignee info
+                if fetch_details and isinstance(feature, dict) and feature.get('reference_num'):
+                    try:
+                        # Fetch full feature details
+                        feature_detail = await client.request('GET', f"/features/{feature['reference_num']}")
+                        if 'feature' in feature_detail and isinstance(feature_detail['feature'], dict):
+                            feature = feature_detail['feature']
+                    except Exception as e:
+                        # If detailed fetch fails, use original data
+                        pass
                 
-                results.append(format_feature_summary(feature))
+                # Ensure feature is still a dict before formatting
+                if isinstance(feature, dict):
+                    try:
+                        results.append(format_feature_summary(feature))
+                    except Exception as e:
+                        results.append(f"Error formatting feature {feature.get('reference_num', 'unknown')}: {str(e)}")
+                else:
+                    results.append(f"Error: Invalid feature data type: {type(feature)} - {feature}")
             
             total_found = len(features)
             result_text = f"Found {total_found} feature(s):\n\n"
@@ -372,63 +434,38 @@ async def get_feature(feature_id: str) -> str:
 @mcp.tool()
 async def create_feature(
     name: str,
-    description: Optional[str] = None,
-    release_id: Optional[str] = None,
-    epic_id: Optional[str] = None,
-    assignee: Optional[str] = None,
-    tags: Optional[str] = None,
-    custom_fields: Optional[str] = None
+    release_id: str,
+    description: Optional[str] = None
 ) -> str:
     """Create a new FEATURE in Aha!. Features are development work items that get implemented 
     by engineering teams (different from ideas which are customer requests/suggestions).
     
     Args:
         name: Feature name/title
+        release_id: Release to assign the feature to (REQUIRED - use list_products to find releases)
         description: Feature description or requirements
-        release_id: Release to assign the feature to
-        epic_id: Epic to assign the feature to  
-        assignee: User to assign the feature to
-        tags: Tags to add (comma-separated)
-        custom_fields: Custom field values as JSON string
     """
     try:
         config = load_config()
         
+        # Validate required release_id
+        if not release_id or not release_id.strip():
+            return "Error: release_id is required. Please specify which release to create the feature in. Use list_products to find available releases."
+        
         # Build feature data
         feature_data = {
             'feature': {
-                'name': name
+                'name': name,
+                'release_id': release_id
             }
         }
         
         if description:
             feature_data['feature']['description'] = description
-        if release_id:
-            feature_data['feature']['release_id'] = release_id
-        if epic_id:
-            feature_data['feature']['epic_id'] = epic_id
-        if assignee:
-            feature_data['feature']['assigned_to_user'] = assignee
-        
-        # Handle tags
-        if tags:
-            tag_list = [tag.strip() for tag in tags.split(',')]
-            feature_data['feature']['tags'] = tag_list
-        
-        # Handle custom fields
-        if custom_fields:
-            try:
-                custom_fields_data = json.loads(custom_fields)
-                feature_data['feature']['custom_fields'] = custom_fields_data
-            except json.JSONDecodeError:
-                return "Error: custom_fields must be valid JSON"
         
         async with AhaAPIClient(config) as client:
-            # Use release-specific endpoint if release_id is provided
-            if release_id:
-                endpoint = f'/releases/{release_id}/features'
-            else:
-                endpoint = '/features'
+            # Always use release-specific endpoint since release_id is required
+            endpoint = f'/releases/{release_id}/features'
             
             data = await client.request('POST', endpoint, json=feature_data)
             
@@ -936,11 +973,6 @@ async def list_users(
                 if user.get('created_at'):
                     user_info.append(f"  Created: {user['created_at']}")
                 
-                # Add debug info for first user
-                if i == 0:
-                    debug_info = f"DEBUG - Available user fields: {list(user.keys())}"
-                    results.append(debug_info)
-                
                 results.append("\n".join(user_info))
                 results.append("")  # Empty line for separation
             
@@ -1004,9 +1036,6 @@ async def get_current_user() -> str:
                 
             if user.get('last_active'):
                 results.append(f"Last Active: {user['last_active']}")
-            
-            # Add debug info showing all available fields
-            results.append(f"\nAvailable user fields: {list(user.keys())}")
             
             return "\n".join(results)
             
