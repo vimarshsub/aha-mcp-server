@@ -260,7 +260,7 @@ async def search_features(
     release_id: Optional[str] = None,
     epic_id: Optional[str] = None,
     status: Optional[str] = None,
-    assignee: Optional[str] = None,
+    assigned_to_user: Optional[str] = None,
     tags: Optional[str] = None,
     limit: int = 20
 ) -> str:
@@ -276,7 +276,7 @@ async def search_features(
         release_id: Filter by release ID
         epic_id: Filter by epic ID
         status: Filter by workflow status (e.g., "In Development", "FCS", "Shipped")
-        assignee: Filter by assignee name
+        assigned_to_user: Filter by assignee email or user ID (e.g., "user@company.com" or user ID)
         tags: Filter by tags (comma-separated)
         limit: Maximum number of results (default: 20)
     """
@@ -301,8 +301,8 @@ async def search_features(
             params['q'] = query
         if status:
             params['status'] = status
-        if assignee:
-            params['assignee'] = assignee
+        if assigned_to_user:
+            params['assigned_to_user'] = assigned_to_user
         if tags:
             params['tags'] = tags
         
@@ -424,7 +424,13 @@ async def create_feature(
                 return "Error: custom_fields must be valid JSON"
         
         async with AhaAPIClient(config) as client:
-            data = await client.request('POST', '/features', json=feature_data)
+            # Use release-specific endpoint if release_id is provided
+            if release_id:
+                endpoint = f'/releases/{release_id}/features'
+            else:
+                endpoint = '/features'
+            
+            data = await client.request('POST', endpoint, json=feature_data)
             
             feature = data.get('feature', data)
             ref_num = feature.get('reference_num', 'N/A')
@@ -873,7 +879,199 @@ async def get_related_ideas(
     except Exception as e:
         return f"Error retrieving related ideas: {str(e)}"
 
+@mcp.tool()
+async def list_users(
+    limit: int = 20,
+    query: Optional[str] = None
+) -> str:
+    """List users in the Aha! workspace. This tool helps find user information including 
+    names, emails, and user IDs that can be used for assignee filtering.
+    
+    Args:
+        limit: Maximum number of users to return (default: 20)
+        query: Optional text search query to filter users by name or email
+    """
+    try:
+        config = load_config()
+        
+        # Build search parameters
+        params = {'per_page': min(limit, 200)}
+        
+        if query:
+            params['q'] = query
+        
+        async with AhaAPIClient(config) as client:
+            data = await client.request('GET', '/users', params=params)
+            
+            users = data.get('users', [])
+            if not users:
+                return "No users found matching the search criteria."
+            
+            # Format results
+            results = []
+            for i, user in enumerate(users[:limit]):
+                user_info = []
+                
+                # Basic user information
+                name = user.get('name', 'Unknown')
+                email = user.get('email', 'No email')
+                user_id = user.get('id', 'No ID')
+                reference_num = user.get('reference_num', 'No reference')
+                
+                user_info.append(f"User: {name}")
+                user_info.append(f"  Email: {email}")
+                user_info.append(f"  User ID: {user_id}")
+                user_info.append(f"  Reference: {reference_num}")
+                
+                # Additional fields if available
+                if user.get('title'):
+                    user_info.append(f"  Title: {user['title']}")
+                
+                if user.get('department'):
+                    user_info.append(f"  Department: {user['department']}")
+                
+                if user.get('is_admin'):
+                    user_info.append(f"  Admin: {user['is_admin']}")
+                
+                if user.get('created_at'):
+                    user_info.append(f"  Created: {user['created_at']}")
+                
+                # Add debug info for first user
+                if i == 0:
+                    debug_info = f"DEBUG - Available user fields: {list(user.keys())}"
+                    results.append(debug_info)
+                
+                results.append("\n".join(user_info))
+                results.append("")  # Empty line for separation
+            
+            total_found = len(users)
+            result_text = f"Found {total_found} user(s):\n\n"
+            result_text += "\n".join(results)
+            
+            if total_found > limit:
+                result_text += f"\n\n(Showing first {limit} results)"
+            
+            return result_text
+            
+    except Exception as e:
+        return f"Error listing users: {str(e)}"
+
+@mcp.tool()
+async def get_current_user() -> str:
+    """Get information about the current authenticated user.
+    
+    This tool calls the /api/v1/me endpoint to retrieve details about the user
+    associated with the current API key, including name, email, permissions, and role.
+    """
+    try:
+        config = load_config()
+        
+        async with AhaAPIClient(config) as client:
+            data = await client.request('GET', '/me')
+            
+            user = data.get('user', data)
+            
+            # Format user information
+            results = []
+            
+            # Basic user information
+            name = user.get('name', 'Unknown')
+            email = user.get('email', 'No email')
+            user_id = user.get('id', 'No ID')
+            
+            results.append(f"Current User: {name}")
+            results.append(f"Email: {email}")
+            results.append(f"User ID: {user_id}")
+            
+            # Additional fields if available
+            if user.get('reference_num'):
+                results.append(f"Reference: {user['reference_num']}")
+                
+            if user.get('title'):
+                results.append(f"Title: {user['title']}")
+                
+            if user.get('department'):
+                results.append(f"Department: {user['department']}")
+                
+            if user.get('is_admin') is not None:
+                results.append(f"Admin: {user['is_admin']}")
+                
+            if user.get('role'):
+                results.append(f"Role: {user['role']}")
+                
+            if user.get('created_at'):
+                results.append(f"Created: {user['created_at']}")
+                
+            if user.get('last_active'):
+                results.append(f"Last Active: {user['last_active']}")
+            
+            # Add debug info showing all available fields
+            results.append(f"\nAvailable user fields: {list(user.keys())}")
+            
+            return "\n".join(results)
+            
+    except Exception as e:
+        return f"Error retrieving current user information: {str(e)}"
+
 if __name__ == "__main__":
+    import sys
+    
+    # Check for help command
+    if len(sys.argv) > 1 and sys.argv[1] in ['--help', '-h', 'help']:
+        print("""
+Aha! MCP Server - Model Context Protocol Integration
+
+USAGE:
+    python aha_mcp_server.py [OPTIONS]
+
+OPTIONS:
+    --help, -h, help    Show this help message and exit
+
+DESCRIPTION:
+    This MCP server provides integration between AI agents and Aha! product management.
+    The server runs via stdio transport and provides the following tools:
+
+FEATURE MANAGEMENT TOOLS:
+    - mcp_aha_get_feature          Get detailed feature information
+    - mcp_aha_search_features      Search features with filters  
+    - mcp_aha_create_feature       Create new features
+    - mcp_aha_update_feature       Update existing features
+    - mcp_aha_update_feature_status Update feature workflow status
+    - mcp_aha_update_feature_score Update feature scoring
+    - mcp_aha_add_feature_tags     Add or replace feature tags
+    - mcp_aha_delete_feature       Delete features (with confirmation)
+
+PRODUCT & RELEASE MANAGEMENT TOOLS:
+    - mcp_aha_list_products        List all available products
+    - mcp_aha_list_features_by_release  Get features in a specific release
+    - mcp_aha_list_features_by_epic     Get features in a specific epic
+    - mcp_aha_list_users           List users in the workspace
+    - mcp_aha_get_current_user     Get current authenticated user info
+
+IDEAS & FEEDBACK TOOLS:
+    - mcp_aha_get_related_ideas    Search for customer ideas and feedback
+
+CONFIGURATION:
+    The server requires aha_config.json with your Aha! credentials:
+    {
+        "aha_domain": "yourcompany.aha.io",
+        "api_key": "your_api_key_here",
+        "default_product": "optional_default_product_id"
+    }
+
+EXAMPLES:
+    # Run the MCP server
+    python aha_mcp_server.py
+    
+    # In VS Code or Claude Desktop, use tools like:
+    @mcp_aha_search_features query="API security" limit=10
+    @mcp_aha_get_feature DNAC-10991
+    @mcp_aha_list_users limit=20
+
+For more information, see README.md
+        """)
+        sys.exit(0)
+    
     # Initialize and run the server
     mcp.run(transport='stdio')
 
