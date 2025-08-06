@@ -315,11 +315,15 @@ async def search_features(
     tags: Optional[str] = None,
     limit: int = 20
 ) -> str:
-    """Search for FEATURES in the Aha! workspace. Use this tool when looking for development features, 
-    requirements, or functionality that is being built or planned. Features are work items that get 
-    implemented by development teams.
+    """Search for FEATURES in the Aha! workspace by text query, assignee, or other filters. 
+    Use this tool when searching by:
+    - Feature name or description content (text query)
+    - Assignee email or user ID
+    - Status, tags, or other feature attributes
+    - Cross-product or workspace-wide searches
     
     For searching IDEAS (customer requests, feedback, suggestions), use get_related_ideas instead.
+    For listing ALL features in a specific release, use list_features_by_release instead.
     
     Args:
         query: Text search query for feature names, descriptions, or content
@@ -364,25 +368,10 @@ async def search_features(
             if not features:
                 return "No features found matching the search criteria."
             
-            # Format results - fetch full details if needed for assignee info
+            # Format results
             results = []
             
-            # Check if we need detailed info (when search includes assignee filter)
-            fetch_details = assigned_to_user is not None
-            
-            for i, feature in enumerate(features[:limit]):
-                # If we're filtering by assignee, fetch full details to show assignee info
-                if fetch_details and isinstance(feature, dict) and feature.get('reference_num'):
-                    try:
-                        # Fetch full feature details
-                        feature_detail = await client.request('GET', f"/features/{feature['reference_num']}")
-                        if 'feature' in feature_detail and isinstance(feature_detail['feature'], dict):
-                            feature = feature_detail['feature']
-                    except Exception as e:
-                        # If detailed fetch fails, use original data
-                        pass
-                
-                # Ensure feature is still a dict before formatting
+            for feature in features[:limit]:
                 if isinstance(feature, dict):
                     try:
                         results.append(format_feature_summary(feature))
@@ -443,6 +432,7 @@ async def create_feature(
     Common release IDs:
     - DNAC Parking Lot: 7190101038140158492
     - Use @mcp_aha_list_releases_by_product with DNAC product ID: 7190101037545533715
+    - Use @mcp_aha_list_releases_by_product with IOS XE product ID: 6404884237403568731
     
     NOTE: When copying custom fields from existing features, use the "key" value, not the "name" value.
     Example: Use "rank" (key) instead of "* No Tie Rank" (name) for custom field references.
@@ -591,7 +581,15 @@ async def list_features_by_release(
     include_completed: bool = True,
     limit: int = 50
 ) -> str:
-    """List all features in a specific release.
+    """List ALL features in a specific release. Use this tool when you want to see all features 
+    committed to a particular release, regardless of status or assignee.
+    
+    Use this tool instead of search_features when:
+    - Getting a complete overview of features in a release
+    - The user asks "what features are in release X" or "show me all features for release Y"
+    - You need to list release contents without filtering by assignee or text query
+    
+    For searching features by assignee, name, or description, use search_features instead.
     
     Args:
         release_id: Release ID or reference number
@@ -782,8 +780,12 @@ async def list_products(limit: int = 50) -> str:
     
     Use this tool to:
     - Discover available products and their IDs
-    - Find product reference prefixes (used in feature IDs like "PRJ1-", "PRJ2-", "APP-")
+    - Find product reference prefixes (used in feature IDs like "PRJ1-", "PRJ2-", "APP-", "IOSXE-")
     - Get product information before filtering features by product_id
+    
+    Common products:
+    - DNAC Product: ID 7190101037545533715, Reference Prefix: DNAC
+    - IOS XE Product: ID 6404884237403568731, Reference Prefix: IOSXE
     
     Args:
         limit: Maximum number of results (default: 50)
@@ -1073,9 +1075,10 @@ async def list_releases_by_product(product_id: str, limit: int = 50) -> str:
     
     Common product IDs:
     - DNAC Product: 7190101037545533715
+    - IOS XE Product: 6404884237403568731
     
     Args:
-        product_id: Product ID to list releases for (get from list_products). For DNAC use: 7190101037545533715
+        product_id: Product ID to list releases for (get from list_products). For DNAC use: 7190101037545533715, for IOS XE use: 6404884237403568731
         limit: Maximum number of results (default: 50)
     """
     try:
