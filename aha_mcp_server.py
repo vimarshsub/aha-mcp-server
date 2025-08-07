@@ -313,7 +313,8 @@ async def search_features(
     status: Optional[str] = None,
     assigned_to_user: Optional[str] = None,
     tags: Optional[str] = None,
-    limit: int = 20
+    limit: int = 20,
+    page: int = 1
 ) -> str:
     """Search for FEATURES in the Aha! workspace by text query, assignee, or other filters. 
     Use this tool when searching by:
@@ -333,13 +334,17 @@ async def search_features(
         status: Filter by workflow status (e.g., "In Development", "FCS", "Shipped")
         assigned_to_user: Filter by assignee email or user ID (e.g., "user@company.com" or user ID)
         tags: Filter by tags (comma-separated)
-        limit: Maximum number of results (default: 20)
+        limit: Maximum number of results per page (default: 20, max: 200)
+        page: Page number to retrieve (default: 1)
     """
     try:
         config = load_config()
         
         # Build search parameters
-        params = {'per_page': min(limit, 200)}
+        params = {
+            'per_page': min(limit, 200),
+            'page': max(page, 1)
+        }
         
         # Determine the endpoint based on filters
         if release_id:
@@ -365,13 +370,17 @@ async def search_features(
             data = await client.request('GET', endpoint, params=params)
             
             features = data.get('features', [])
+            
+            # Extract pagination info according to Aha! API structure
+            pagination = data.get('pagination', {})
+            
             if not features:
                 return "No features found matching the search criteria."
             
             # Format results
             results = []
             
-            for feature in features[:limit]:
+            for feature in features:
                 if isinstance(feature, dict):
                     try:
                         results.append(format_feature_summary(feature))
@@ -380,12 +389,30 @@ async def search_features(
                 else:
                     results.append(f"Error: Invalid feature data type: {type(feature)} - {feature}")
             
-            total_found = len(features)
-            result_text = f"Found {total_found} feature(s):\n\n"
+            # Build pagination info using the correct field names
+            current_page = pagination.get('current_page', page)
+            total_pages = pagination.get('total_pages', 1)
+            total_records = pagination.get('total_records', len(features))
+            
+            # Display results with pagination info if available
+            if pagination and 'total_records' in pagination:
+                result_text = f"Found {total_records} feature(s) (Page {current_page} of {total_pages}):\n\n"
+            else:
+                result_text = f"Found {len(features)} feature(s):\n\n"
+                
             result_text += "\n\n".join(results)
             
-            if total_found > limit:
-                result_text += f"\n\n(Showing first {limit} results)"
+            # Add pagination guidance only if we have meaningful pagination data
+            if pagination and total_pages > 1:
+                result_text += f"\n\n--- Pagination Info ---"
+                result_text += f"\nShowing page {current_page} of {total_pages}"
+                result_text += f"\nTotal features: {total_records}"
+                result_text += f"\nResults per page: {len(features)}"
+                
+                if current_page < total_pages:
+                    result_text += f"\nTo see next page, use: page={current_page + 1}"
+                if current_page > 1:
+                    result_text += f"\nTo see previous page, use: page={current_page - 1}"
             
             return result_text
             
@@ -579,7 +606,8 @@ async def delete_feature(feature_id: str, confirm: bool = False) -> str:
 async def list_features_by_release(
     release_id: str,
     include_completed: bool = True,
-    limit: int = 50
+    limit: int = 50,
+    page: int = 1
 ) -> str:
     """List ALL features in a specific release. Use this tool when you want to see all features 
     committed to a particular release, regardless of status or assignee.
@@ -594,12 +622,16 @@ async def list_features_by_release(
     Args:
         release_id: Release ID or reference number
         include_completed: Include completed features
-        limit: Maximum number of results
+        limit: Maximum number of results per page (default: 50, max: 200)
+        page: Page number to retrieve (default: 1)
     """
     try:
         config = load_config()
         
-        params = {'per_page': min(limit, 200)}
+        params = {
+            'per_page': min(limit, 200),
+            'page': max(page, 1)
+        }
         if not include_completed:
             params['exclude_completed'] = 'true'
         
@@ -607,20 +639,42 @@ async def list_features_by_release(
             data = await client.request('GET', f"/releases/{release_id}/features", params=params)
             
             features = data.get('features', [])
+            
+            # Extract pagination info according to Aha! API structure
+            pagination = data.get('pagination', {})
+            
             if not features:
                 return f"No features found in release: {release_id}"
             
             # Format results
             results = []
-            for feature in features[:limit]:
+            for feature in features:
                 results.append(format_feature_summary(feature))
             
-            total_found = len(features)
-            result_text = f"Found {total_found} feature(s) in release {release_id}:\n\n"
+            # Build pagination info using the correct field names
+            current_page = pagination.get('current_page', page)
+            total_pages = pagination.get('total_pages', 1)
+            total_records = pagination.get('total_records', len(features))
+            
+            # Display results with pagination info if available
+            if pagination and 'total_records' in pagination:
+                result_text = f"Found {total_records} feature(s) in release {release_id} (Page {current_page} of {total_pages}):\n\n"
+            else:
+                result_text = f"Found {len(features)} feature(s) in release {release_id}:\n\n"
+                
             result_text += "\n\n".join(results)
             
-            if total_found > limit:
-                result_text += f"\n\n(Showing first {limit} results)"
+            # Add pagination guidance only if we have meaningful pagination data
+            if pagination and total_pages > 1:
+                result_text += f"\n\n--- Pagination Info ---"
+                result_text += f"\nShowing page {current_page} of {total_pages}"
+                result_text += f"\nTotal features: {total_records}"
+                result_text += f"\nResults per page: {len(features)}"
+                
+                if current_page < total_pages:
+                    result_text += f"\nTo see next page, use: page={current_page + 1}"
+                if current_page > 1:
+                    result_text += f"\nTo see previous page, use: page={current_page - 1}"
             
             return result_text
             
@@ -628,36 +682,62 @@ async def list_features_by_release(
         return f"Error listing features by release: {str(e)}"
 
 @mcp.tool()
-async def list_features_by_epic(epic_id: str, limit: int = 50) -> str:
+async def list_features_by_epic(epic_id: str, limit: int = 50, page: int = 1) -> str:
     """List all features in a specific epic.
     
     Args:
         epic_id: Epic ID or reference number
-        limit: Maximum number of results
+        limit: Maximum number of results per page (default: 50, max: 200)
+        page: Page number to retrieve (default: 1)
     """
     try:
         config = load_config()
         
-        params = {'per_page': min(limit, 200)}
+        params = {
+            'per_page': min(limit, 200),
+            'page': max(page, 1)
+        }
         
         async with AhaAPIClient(config) as client:
             data = await client.request('GET', f"/epics/{epic_id}/features", params=params)
             
             features = data.get('features', [])
+            
+            # Extract pagination info according to Aha! API structure
+            pagination = data.get('pagination', {})
+            
             if not features:
                 return f"No features found in epic: {epic_id}"
             
             # Format results
             results = []
-            for feature in features[:limit]:
+            for feature in features:
                 results.append(format_feature_summary(feature))
             
-            total_found = len(features)
-            result_text = f"Found {total_found} feature(s) in epic {epic_id}:\n\n"
+            # Build pagination info using the correct field names
+            current_page = pagination.get('current_page', page)
+            total_pages = pagination.get('total_pages', 1)
+            total_records = pagination.get('total_records', len(features))
+            
+            # Display results with pagination info if available
+            if pagination and 'total_records' in pagination:
+                result_text = f"Found {total_records} feature(s) in epic {epic_id} (Page {current_page} of {total_pages}):\n\n"
+            else:
+                result_text = f"Found {len(features)} feature(s) in epic {epic_id}:\n\n"
+                
             result_text += "\n\n".join(results)
             
-            if total_found > limit:
-                result_text += f"\n\n(Showing first {limit} results)"
+            # Add pagination guidance only if we have meaningful pagination data
+            if pagination and total_pages > 1:
+                result_text += f"\n\n--- Pagination Info ---"
+                result_text += f"\nShowing page {current_page} of {total_pages}"
+                result_text += f"\nTotal features: {total_records}"
+                result_text += f"\nResults per page: {len(features)}"
+                
+                if current_page < total_pages:
+                    result_text += f"\nTo see next page, use: page={current_page + 1}"
+                if current_page > 1:
+                    result_text += f"\nTo see previous page, use: page={current_page - 1}"
             
             return result_text
             
@@ -1065,7 +1145,7 @@ async def get_current_user() -> str:
         return f"Error retrieving current user information: {str(e)}"
 
 @mcp.tool()
-async def list_releases_by_product(product_id: str, limit: int = 50) -> str:
+async def list_releases_by_product(product_id: str, limit: int = 50, page: int = 1) -> str:
     """List all releases within a specific product in the Aha! workspace.
     
     Use this tool to:
@@ -1079,17 +1159,25 @@ async def list_releases_by_product(product_id: str, limit: int = 50) -> str:
     
     Args:
         product_id: Product ID to list releases for (get from list_products). For DNAC use: 7190101037545533715, for IOS XE use: 6404884237403568731
-        limit: Maximum number of results (default: 50)
+        limit: Maximum number of results per page (default: 50, max: 200)
+        page: Page number to retrieve (default: 1)
     """
     try:
         config = load_config()
         
-        params = {'per_page': min(limit, 200)}
+        params = {
+            'per_page': min(limit, 200),
+            'page': max(page, 1)
+        }
         
         async with AhaAPIClient(config) as client:
             data = await client.request('GET', f'/products/{product_id}/releases', params=params)
             
             releases = data.get('releases', [])
+            
+            # Extract pagination info according to Aha! API structure
+            pagination = data.get('pagination', {})
+            
             if not releases:
                 return f"No releases found for product ID: {product_id}"
             
@@ -1122,12 +1210,30 @@ async def list_releases_by_product(product_id: str, limit: int = 50) -> str:
                 
                 results.append("")  # Empty line for separation
             
-            total_found = len(releases)
-            result_text = f"Found {total_found} release(s) for product {product_id}:\n\n"
+            # Build pagination info using the correct field names
+            current_page = pagination.get('current_page', page)
+            total_pages = pagination.get('total_pages', 1)
+            total_records = pagination.get('total_records', len(releases))
+            
+            # Display results with pagination info if available
+            if pagination and 'total_records' in pagination:
+                result_text = f"Found {total_records} release(s) for product {product_id} (Page {current_page} of {total_pages}):\n\n"
+            else:
+                result_text = f"Found {len(releases)} release(s) for product {product_id}:\n\n"
+                
             result_text += "\n".join(results)
             
-            if total_found >= limit:
-                result_text += f"\n\n(Showing first {limit} results)"
+            # Add pagination guidance only if we have meaningful pagination data
+            if pagination and total_pages > 1:
+                result_text += f"\n\n--- Pagination Info ---"
+                result_text += f"\nShowing page {current_page} of {total_pages}"
+                result_text += f"\nTotal releases: {total_records}"
+                result_text += f"\nResults per page: {len(releases)}"
+                
+                if current_page < total_pages:
+                    result_text += f"\nTo see next page, use: page={current_page + 1}"
+                if current_page > 1:
+                    result_text += f"\nTo see previous page, use: page={current_page - 1}"
             
             return result_text
             
