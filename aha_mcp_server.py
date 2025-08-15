@@ -511,7 +511,7 @@ async def update_feature(
     assignee: Optional[str] = None,
     release_id: Optional[str] = None,
     epic_id: Optional[str] = None,
-    custom_fields: Optional[str] = None
+    rank: Optional[str] = None
 ) -> str:
     """Update an existing feature.
     
@@ -523,16 +523,12 @@ async def update_feature(
         assignee: New assignee
         release_id: New release assignment
         epic_id: New epic assignment
-        custom_fields: Custom field updates as JSON string
+        rank: Feature rank/priority value (will be set in custom fields)
         
-    IMPORTANT: For custom_fields, use the "key" value, not the "name" value from field definitions.
-    Example custom field mapping:
-    - "rank" (key) → "* No Tie Rank" (name)
-    - "feature_prd_info" (key) → "* PRD Info" (name) 
-    - "use_case" (key) → "* Use Case" (name)
-    - "clarity_product" (key) → "Product Tag" (name)
+    IMPORTANT: The rank parameter sets the "rank" custom field in Aha!.
+    This corresponds to the "* No Tie Rank" field in the Aha! UI.
     
-    Example custom_fields JSON: {"rank": "15.0", "feature_prd_info": "See Description"}
+    Example: rank="1" will set the feature's rank to 1
     """
     try:
         config = load_config()
@@ -553,17 +549,11 @@ async def update_feature(
         if epic_id:
             update_data['feature']['epic_id'] = epic_id
         
-        # Handle custom fields
-        if custom_fields:
-            try:
-                custom_fields_data = json.loads(custom_fields)
-                # The Aha! API expects custom fields as either:
-                # 1. Simple key-value pairs: {"field_key": "value"}
-                # 2. Array of objects: [{"key": "field_key", "value": "field_value"}]
-                # We'll try the simple key-value format first
-                update_data['feature']['custom_fields'] = custom_fields_data
-            except json.JSONDecodeError:
-                return "Error: custom_fields must be valid JSON"
+        # Handle rank parameter - convert to custom_fields format
+        if rank:
+            update_data['feature']['custom_fields'] = {
+                "rank": str(rank)
+            }
         
         if not update_data['feature']:
             return "Error: No update fields provided"
@@ -799,7 +789,15 @@ async def add_feature_tags(feature_id: str, tags: str, replace: bool = False) ->
             async with AhaAPIClient(config) as client:
                 current_data = await client.request('GET', f"/features/{feature_id}")
                 current_feature = current_data.get('feature', current_data)
-                current_tags = [tag.get('name', '') for tag in current_feature.get('tags', [])]
+                # Handle both string tags and object tags with 'name' property
+                current_tags = []
+                for tag in current_feature.get('tags', []):
+                    if isinstance(tag, dict):
+                        tag_name = tag.get('name', '')
+                        if tag_name:
+                            current_tags.append(tag_name)
+                    elif isinstance(tag, str) and tag:
+                        current_tags.append(tag)
                 
                 # Combine current and new tags
                 all_tags = list(set(current_tags + tag_list))
@@ -816,7 +814,15 @@ async def add_feature_tags(feature_id: str, tags: str, replace: bool = False) ->
             feature = data.get('feature', data)
             ref_num = feature.get('reference_num', feature_id)
             feature_name = feature.get('name', 'Feature')
-            updated_tags = [tag.get('name', '') for tag in feature.get('tags', [])]
+            # Handle both string tags and object tags with 'name' property
+            updated_tags = []
+            for tag in feature.get('tags', []):
+                if isinstance(tag, dict):
+                    tag_name = tag.get('name', '')
+                    if tag_name:
+                        updated_tags.append(tag_name)
+                elif isinstance(tag, str) and tag:
+                    updated_tags.append(tag)
             
             action = "Replaced" if replace else "Added"
             return f"Successfully {action.lower()} tags for {ref_num} - {feature_name}\nCurrent tags: {', '.join(updated_tags)}"
