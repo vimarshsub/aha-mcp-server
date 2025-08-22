@@ -12,6 +12,7 @@ Version: 1.0.0
 import os
 import json
 import asyncio
+import sys
 from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass
 from datetime import datetime
@@ -302,6 +303,48 @@ Updated: {updated_at}"""
     
     return result
 
+def format_idea_detail(idea: Dict[str, Any]) -> str:
+    """Format an idea for detailed display"""
+    ref_num = idea.get('reference_num', 'N/A')
+    name = idea.get('name', 'Unnamed Idea')
+    
+    # Handle description which can be a string or an object
+    description_raw = idea.get('description', 'No description')
+    if isinstance(description_raw, dict):
+        description = description_raw.get('body', 'No description')
+    else:
+        description = description_raw
+    
+    # Handle workflow status safely
+    workflow_status = idea.get('workflow_status')
+    if isinstance(workflow_status, dict):
+        status = workflow_status.get('name', 'Unknown')
+    elif isinstance(workflow_status, str):
+        status = workflow_status
+    else:
+        status = 'Unknown'
+    
+    # Get category if available
+    category_data = idea.get('category')
+    if isinstance(category_data, dict):
+        category = category_data.get('name', 'No Category')
+    elif isinstance(category_data, str):
+        category = category_data
+    else:
+        category = 'No Category'
+    
+    score = idea.get('score', 'No Score')
+    created_at = idea.get('created_at', '')
+    updated_at = idea.get('updated_at', '')
+    
+    return f"""Idea: {ref_num} - {name}
+Description: {description}
+Status: {status}
+Category: {category}
+Score: {score}
+Created: {created_at}
+Updated: {updated_at}"""
+
 # MCP Tools Implementation
 
 @mcp.tool()
@@ -326,6 +369,10 @@ async def search_features(
     For searching IDEAS (customer requests, feedback, suggestions), use get_related_ideas instead.
     For listing ALL features in a specific release, use list_features_by_release instead.
     
+    Auto-detects product context:
+    - Query containing "CWC" or "Cisco Wireless Cloud" automatically uses CWC product ID
+    - Query containing "DNAC" or "Catalyst Center" automatically uses DNAC product ID
+    
     Args:
         query: Text search query for feature names, descriptions, or content
         product_id: Filter by product ID
@@ -345,6 +392,14 @@ async def search_features(
             'per_page': min(limit, 200),
             'page': max(page, 1)
         }
+        
+        # Auto-detect product based on query context
+        if query and not product_id:
+            query_lower = query.lower()
+            if 'cwc' in query_lower or 'cisco wireless cloud' in query_lower:
+                product_id = "7501397512680829881"  # CWC (Cisco Wireless Cloud) product
+            elif 'dnac' in query_lower or 'catalyst center' in query_lower:
+                product_id = "7190101037545533715"  # DNAC product
         
         # Determine the endpoint based on filters
         if release_id:
@@ -458,8 +513,10 @@ async def create_feature(
     
     Common release IDs:
     - DNAC Parking Lot: 7190101038140158492
+    - CWC R33-1 Release: 7505953780347657025
     - Use @mcp_aha_list_releases_by_product with DNAC product ID: 7190101037545533715
     - Use @mcp_aha_list_releases_by_product with IOS XE product ID: 6404884237403568731
+    - Use @mcp_aha_list_releases_by_product with CWC product ID: 7501397512680829881
     
     NOTE: When copying custom fields from existing features, use the "key" value, not the "name" value.
     Example: Use "rank" (key) instead of "* No Tie Rank" (name) for custom field references.
@@ -872,6 +929,7 @@ async def list_products(limit: int = 50) -> str:
     Common products:
     - DNAC Product: ID 7190101037545533715, Reference Prefix: DNAC
     - IOS XE Product: ID 6404884237403568731, Reference Prefix: IOSXE
+    - CWC Product: ID 7501397512680829881, Reference Prefix: CWC
     
     Args:
         limit: Maximum number of results (default: 50)
@@ -1162,9 +1220,10 @@ async def list_releases_by_product(product_id: str, limit: int = 50, page: int =
     Common product IDs:
     - DNAC Product: 7190101037545533715
     - IOS XE Product: 6404884237403568731
+    - CWC Product: 7501397512680829881
     
     Args:
-        product_id: Product ID to list releases for (get from list_products). For DNAC use: 7190101037545533715, for IOS XE use: 6404884237403568731
+        product_id: Product ID to list releases for (get from list_products). For DNAC use: 7190101037545533715, for IOS XE use: 6404884237403568731, for CWC use: 7501397512680829881
         limit: Maximum number of results per page (default: 50, max: 200)
         page: Page number to retrieve (default: 1)
     """
@@ -1246,6 +1305,261 @@ async def list_releases_by_product(product_id: str, limit: int = 50, page: int =
     except Exception as e:
         return f"Error retrieving releases for product {product_id}: {str(e)}"
 
+@mcp.tool()
+async def create_idea(
+    name: str,
+    product_id: str,
+    created_by: str,
+    description: Optional[str] = None,
+    workflow_status: Optional[str] = None,
+    tags: Optional[str] = None,
+    categories: Optional[str] = None,
+    submitted_idea_portal_id: Optional[str] = None
+) -> str:
+    """Create a new IDEA in a specific product in Aha!. Ideas are customer requests, 
+    feedback, suggestions, or enhancement ideas that are different from features.
+    
+    IDEAS are customer-submitted requests/suggestions, while FEATURES are development 
+    work items. Use create_feature for development work items instead.
+    
+    Common product IDs:
+    - DNAC Product: 7190101037545533715
+    - IOS XE Product: 6404884237403568731
+    - CWC Product: 7501397512680829881
+    
+    Args:
+        name: Idea name/title (REQUIRED)
+        product_id: Numeric ID or key of the product (REQUIRED - use list_products to find products)
+        created_by: Email or user ID of the idea creator (REQUIRED)
+        description: Description of the idea — may include HTML formatting
+        workflow_status: Status of the idea — must be a valid status for the selected product
+        tags: Tags to add to the idea. Multiple tags must be separated by commas
+        categories: Names of any existing categories the idea should be assigned to. Multiple categories must be separated by commas
+        submitted_idea_portal_id: Numeric ID of the ideas portal. Strongly suggested if the creator is an idea user
+    """
+    try:
+        config = load_config()
+        
+        # Validate required fields
+        if not product_id or not product_id.strip():
+            return "Error: product_id is required. Please specify which product to create the idea in. Use list_products to find available products."
+        
+        if not name or not name.strip():
+            return "Error: name is required. Please provide a name for the idea."
+            
+        if not created_by or not created_by.strip():
+            return "Error: created_by is required. Please provide the email or user ID of the idea creator."
+        
+        # Build idea data
+        idea_data = {
+            'idea': {
+                'name': name,
+                'product_id': product_id,
+                'created_by': created_by
+            }
+        }
+        
+        # Add optional fields if provided
+        if description:
+            idea_data['idea']['description'] = description
+            
+        if workflow_status:
+            idea_data['idea']['workflow_status'] = workflow_status
+            
+        if tags:
+            idea_data['idea']['tags'] = tags
+            
+        if categories:
+            idea_data['idea']['categories'] = categories
+            
+        if submitted_idea_portal_id:
+            idea_data['idea']['submitted_idea_portal_id'] = submitted_idea_portal_id
+        
+        async with AhaAPIClient(config) as client:
+            # Use the product-specific endpoint for creating ideas
+            endpoint = f'/products/{product_id}/ideas'
+            
+            data = await client.request('POST', endpoint, json=idea_data)
+            
+            idea = data.get('idea', data)
+            ref_num = idea.get('reference_num', 'N/A')
+            idea_name = idea.get('name', name)
+            idea_id = idea.get('id', 'N/A')
+            
+            # Format the idea details for response
+            status = idea.get('workflow_status', {}).get('name', 'Unknown') if isinstance(idea.get('workflow_status'), dict) else 'Unknown'
+            created_at = idea.get('created_at', '')
+            
+            # Get category if available
+            category_data = idea.get('category')
+            if isinstance(category_data, dict):
+                category = category_data.get('name', 'No Category')
+            elif isinstance(category_data, str):
+                category = category_data
+            else:
+                category = 'No Category'
+            
+            # Get tags if available
+            idea_tags = []
+            if 'tags' in idea and idea['tags']:
+                if isinstance(idea['tags'], list):
+                    idea_tags = [tag.get('name', '') if isinstance(tag, dict) else str(tag) for tag in idea['tags'] if tag]
+                elif isinstance(idea['tags'], str):
+                    idea_tags = [idea['tags']]
+            
+            result = f"Successfully created idea: {ref_num} - {idea_name}\n\n"
+            result += f"Idea: {ref_num} - {idea_name}\n"
+            result += f"ID: {idea_id}\n"
+            result += f"Status: {status}\n"
+            result += f"Category: {category}\n"
+            result += f"Product ID: {product_id}\n"
+            result += f"Created by: {created_by}\n"
+            result += f"Tags: {', '.join(idea_tags) if idea_tags else 'None'}\n"
+            result += f"Created: {created_at}\n"
+            
+            if description:
+                # Truncate long descriptions for display
+                display_desc = description[:200] + "..." if len(description) > 200 else description
+                result += f"Description: {display_desc}\n"
+            
+            return result
+            
+    except Exception as e:
+        return f"Error creating idea: {str(e)}"
+
+@mcp.tool()
+async def get_idea(idea_id: str) -> str:
+    """Get detailed information about a specific IDEA by its ID or reference number.
+    Ideas are customer requests, feedback, suggestions, or enhancement ideas.
+    
+    Use this tool when you have a specific idea ID (e.g., "CN-I-21062", "SDWAN-I-46") 
+    and need complete details including assignee, status, description, category, etc.
+    
+    Args:
+        idea_id: Idea ID or reference number (e.g., "CN-I-21062", "SDWAN-I-46")
+    """
+    try:
+        config = load_config()
+        
+        async with AhaAPIClient(config) as client:
+            data = await client.request('GET', f'/ideas/{idea_id}')
+            
+            # The API returns the idea data directly or wrapped in an 'idea' key
+            idea = data.get('idea', data)
+            
+            # Format idea details
+            ref_num = idea.get('reference_num', 'N/A')
+            name = idea.get('name', 'Unnamed Idea')
+            idea_internal_id = idea.get('id', 'N/A')
+            
+            # Handle description which can be a string or an object
+            description_raw = idea.get('description', 'No description')
+            if isinstance(description_raw, dict):
+                description = description_raw.get('body', 'No description')
+            else:
+                description = description_raw
+            
+            # Handle workflow status safely
+            workflow_status = idea.get('workflow_status')
+            if isinstance(workflow_status, dict):
+                status = workflow_status.get('name', 'Unknown')
+            elif isinstance(workflow_status, str):
+                status = workflow_status
+            else:
+                status = 'Unknown'
+            
+            # Get category if available
+            category_data = idea.get('category')
+            if isinstance(category_data, dict):
+                category = category_data.get('name', 'No Category')
+            elif isinstance(category_data, str):
+                category = category_data
+            else:
+                category = 'No Category'
+            
+            # Get product info
+            product_data = idea.get('product')
+            if isinstance(product_data, dict):
+                product = product_data.get('name', 'No Product')
+            elif isinstance(product_data, str):
+                product = product_data
+            else:
+                product = 'No Product'
+                
+            score = idea.get('score', 'No Score')
+            created_at = idea.get('created_at', '')
+            updated_at = idea.get('updated_at', '')
+            
+            # Get creator information if available
+            created_by = idea.get('created_by_user', {})
+            if isinstance(created_by, dict):
+                creator = created_by.get('name') or created_by.get('email', 'Unknown')
+            else:
+                creator = 'Unknown'
+            
+            result = f"""Idea: {ref_num} - {name}
+ID: {idea_internal_id}
+Description: {description}
+Status: {status}
+Category: {category}
+Product: {product}
+Score: {score}
+Created by: {creator}
+Created: {created_at}
+Updated: {updated_at}"""
+            
+            return result
+            
+    except Exception as e:
+        return f"Error retrieving idea {idea_id}: {str(e)}"
+
+@mcp.tool()
+async def update_idea(
+    idea_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    status: Optional[str] = None,
+    category_id: Optional[str] = None
+) -> str:
+    """Update an existing idea.
+    
+    Args:
+        idea_id: Idea ID or reference number
+        name: New idea name
+        description: New idea description
+        status: New workflow status
+        category_id: New category ID
+    """
+    try:
+        config = load_config()
+        
+        # Build update data
+        update_data = {'idea': {}}
+        
+        if name:
+            update_data['idea']['name'] = name
+        if description:
+            update_data['idea']['description'] = description
+        if status:
+            update_data['idea']['workflow_status'] = status
+        if category_id:
+            update_data['idea']['category_id'] = category_id
+        
+        if not update_data['idea']:
+            return "Error: No update fields provided"
+        
+        async with AhaAPIClient(config) as client:
+            data = await client.request('PUT', f"/ideas/{idea_id}", json=update_data)
+            
+            idea = data.get('idea', data)
+            ref_num = idea.get('reference_num', idea_id)
+            idea_name = idea.get('name', 'Updated Idea')
+            
+            return f"Successfully updated idea: {ref_num} - {idea_name}\n\n{format_idea_detail(idea)}"
+            
+    except Exception as e:
+        return f"Error updating idea: {str(e)}"
+
 if __name__ == "__main__":
     import sys
     
@@ -1284,6 +1598,9 @@ PRODUCT & RELEASE MANAGEMENT TOOLS:
 
 IDEAS & FEEDBACK TOOLS:
     - mcp_aha_get_related_ideas    Search for customer ideas and feedback
+    - mcp_aha_create_idea          Create new customer ideas in products
+    - mcp_aha_get_idea             Get detailed idea information
+    - mcp_aha_update_idea          Update existing ideas
 
 CONFIGURATION:
     The server requires aha_config.json with your Aha! credentials:
